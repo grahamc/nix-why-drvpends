@@ -1,5 +1,21 @@
-$ why-drvpends /nix/store/1m09fh394x19ab3sznl148bzfqalx9i4-nixos-system-Petunia-20.03.git.821d50e.drv /nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv
+# nix, why-drvpends?
 
+## flamegraph
+
+```
+why-drvpends \
+    --flame \
+    /nix/store/1m09fh394x19ab3sznl148bzfqalx9i4-nixos-system-Petunia-20.03.git.821d50e.drv \
+    /nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv \
+  | flamegraph.pl > example.svg
+```
+
+![](./example.svg)
+
+## standard:
+
+```
+$ why-drvpends /nix/store/1m09fh394x19ab3sznl148bzfqalx9i4-nixos-system-Petunia-20.03.git.821d50e.drv /nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv
 => /nix/store/1m09fh394x19ab3sznl148bzfqalx9i4-nixos-system-Petunia-20.03.git.821d50e.drv
   => /nix/store/0bf267ayz2c4v9195g28sn4pzic7b52l-fuse-3.9.0.drv
     => /nix/store/2xs6hfbr2l0fvvr8qc0i23bh1266v0h3-ninja-1.9.0.drv
@@ -856,4 +872,4 @@ $ why-drvpends /nix/store/1m09fh394x19ab3sznl148bzfqalx9i4-nixos-system-Petunia-
         => /nix/store/y6j53ng935x1vfwmyazi7gdznjiajw2m-firefox-beta-bin-72.0b4.drv
           => /nix/store/0aqwjlg5nn4fcfbllr0667mjm8ln164x-firefox-beta-bin-unwrapped-72.0b4.drv
             => /nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv
-
+```

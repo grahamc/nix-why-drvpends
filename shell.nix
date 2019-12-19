@@ -18,5 +18,6 @@ pkgs.mkShell {
     pkgs.nixpkgs-fmt
     pkgs.mypy
     (pkgs.python3.withPackages (pypkgs: with pypkgs; [ black ]))
+    pkgs.flameGraph
   ];
 }

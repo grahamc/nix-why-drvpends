@@ -1,0 +1,1003 @@
+<?xml version="1.0" standalone="no"?>
+<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd">
+<svg version="1.1" width="1200" height="322" onload="init(evt)" viewBox="0 0 1200 322" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+<!-- Flame graph stack visualization. See https://github.com/brendangregg/FlameGraph for latest version, and http://www.brendangregg.com/flamegraphs.html for examples. -->
+<defs >
+	<linearGradient id="background" y1="0" y2="1" x1="0" x2="0" >
+		<stop stop-color="#eeeeee" offset="5%" />
+		<stop stop-color="#eeeeb0" offset="95%" />
+	</linearGradient>
+</defs>
+<style type="text/css">
+	.func_g:hover { stroke:black; stroke-width:0.5; cursor:pointer; }
+</style>
+<script type="text/ecmascript">
+<![CDATA[
+	var details, searchbtn, matchedtxt, svg;
+	function init(evt) {
+		details = document.getElementById("details").firstChild;
+		searchbtn = document.getElementById("search");
+		matchedtxt = document.getElementById("matched");
+		svg = document.getElementsByTagName("svg")[0];
+		searching = 0;
+	}
+
+	// mouse-over for info
+	function s(node) {		// show
+		info = g_to_text(node);
+		details.nodeValue = "Function: " + info;
+	}
+	function c() {			// clear
+		details.nodeValue = ' ';
+	}
+
+	// ctrl-F for search
+	window.addEventListener("keydown",function (e) {
+		if (e.keyCode === 114 || (e.ctrlKey && e.keyCode === 70)) {
+			e.preventDefault();
+			search_prompt();
+		}
+	})
+
+	// functions
+	function find_child(parent, name, attr) {
+		var children = parent.childNodes;
+		for (var i=0; i<children.length;i++) {
+			if (children[i].tagName == name)
+				return (attr != undefined) ? children[i].attributes[attr].value : children[i];
+		}
+		return;
+	}
+	function orig_save(e, attr, val) {
+		if (e.attributes["_orig_"+attr] != undefined) return;
+		if (e.attributes[attr] == undefined) return;
+		if (val == undefined) val = e.attributes[attr].value;
+		e.setAttribute("_orig_"+attr, val);
+	}
+	function orig_load(e, attr) {
+		if (e.attributes["_orig_"+attr] == undefined) return;
+		e.attributes[attr].value = e.attributes["_orig_"+attr].value;
+		e.removeAttribute("_orig_"+attr);
+	}
+	function g_to_text(e) {
+		var text = find_child(e, "title").firstChild.nodeValue;
+		return (text)
+	}
+	function g_to_func(e) {
+		var func = g_to_text(e);
+		// if there's any manipulation we want to do to the function
+		// name before it's searched, do it here before returning.
+		return (func);
+	}
+	function update_text(e) {
+		var r = find_child(e, "rect");
+		var t = find_child(e, "text");
+		var w = parseFloat(r.attributes["width"].value) -3;
+		var txt = find_child(e, "title").textContent.replace(/\([^(]*\)$/,"");
+		t.attributes["x"].value = parseFloat(r.attributes["x"].value) +3;
+
+		// Smaller than this size won't fit anything
+		if (w < 2*12*0.59) {
+			t.textContent = "";
+			return;
+		}
+
+		t.textContent = txt;
+		// Fit in full text width
+		if (/^ *$/.test(txt) || t.getSubStringLength(0, txt.length) < w)
+			return;
+
+		for (var x=txt.length-2; x>0; x--) {
+			if (t.getSubStringLength(0, x+2) <= w) {
+				t.textContent = txt.substring(0,x) + "..";
+				return;
+			}
+		}
+		t.textContent = "";
+	}
+
+	// zoom
+	function zoom_reset(e) {
+		if (e.attributes != undefined) {
+			orig_load(e, "x");
+			orig_load(e, "width");
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_reset(c[i]);
+		}
+	}
+	function zoom_child(e, x, ratio) {
+		if (e.attributes != undefined) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = (parseFloat(e.attributes["x"].value) - x - 10) * ratio + 10;
+				if(e.tagName == "text") e.attributes["x"].value = find_child(e.parentNode, "rect", "x") + 3;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseFloat(e.attributes["width"].value) * ratio;
+			}
+		}
+
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_child(c[i], x-10, ratio);
+		}
+	}
+	function zoom_parent(e) {
+		if (e.attributes) {
+			if (e.attributes["x"] != undefined) {
+				orig_save(e, "x");
+				e.attributes["x"].value = 10;
+			}
+			if (e.attributes["width"] != undefined) {
+				orig_save(e, "width");
+				e.attributes["width"].value = parseInt(svg.width.baseVal.value) - (10*2);
+			}
+		}
+		if (e.childNodes == undefined) return;
+		for(var i=0, c=e.childNodes; i<c.length; i++) {
+			zoom_parent(c[i]);
+		}
+	}
+	function zoom(node) {
+		var attr = find_child(node, "rect").attributes;
+		var width = parseFloat(attr["width"].value);
+		var xmin = parseFloat(attr["x"].value);
+		var xmax = parseFloat(xmin + width);
+		var ymin = parseFloat(attr["y"].value);
+		var ratio = (svg.width.baseVal.value - 2*10) / width;
+
+		// XXX: Workaround for JavaScript float issues (fix me)
+		var fudge = 0.0001;
+
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "1.0";
+
+		var el = document.getElementsByTagName("g");
+		for(var i=0;i<el.length;i++){
+			var e = el[i];
+			var a = find_child(e, "rect").attributes;
+			var ex = parseFloat(a["x"].value);
+			var ew = parseFloat(a["width"].value);
+			// Is it an ancestor
+			if (0 == 0) {
+				var upstack = parseFloat(a["y"].value) > ymin;
+			} else {
+				var upstack = parseFloat(a["y"].value) < ymin;
+			}
+			if (upstack) {
+				// Direct ancestor
+				if (ex <= xmin && (ex+ew+fudge) >= xmax) {
+					e.style["opacity"] = "0.5";
+					zoom_parent(e);
+					e.onclick = function(e){unzoom(); zoom(this);};
+					update_text(e);
+				}
+				// not in current path
+				else
+					e.style["display"] = "none";
+			}
+			// Children maybe
+			else {
+				// no common path
+				if (ex < xmin || ex + fudge >= xmax) {
+					e.style["display"] = "none";
+				}
+				else {
+					zoom_child(e, xmin, ratio);
+					e.onclick = function(e){zoom(this);};
+					update_text(e);
+				}
+			}
+		}
+	}
+	function unzoom() {
+		var unzoombtn = document.getElementById("unzoom");
+		unzoombtn.style["opacity"] = "0.0";
+
+		var el = document.getElementsByTagName("g");
+		for(i=0;i<el.length;i++) {
+			el[i].style["display"] = "block";
+			el[i].style["opacity"] = "1";
+			zoom_reset(el[i]);
+			update_text(el[i]);
+		}
+	}
+
+	// search
+	function reset_search() {
+		var el = document.getElementsByTagName("rect");
+		for (var i=0; i < el.length; i++) {
+			orig_load(el[i], "fill")
+		}
+	}
+	function search_prompt() {
+		if (!searching) {
+			var term = prompt("Enter a search term (regexp " +
+			    "allowed, eg: ^ext4_)", "");
+			if (term != null) {
+				search(term)
+			}
+		} else {
+			reset_search();
+			searching = 0;
+			searchbtn.style["opacity"] = "0.1";
+			searchbtn.firstChild.nodeValue = "Search"
+			matchedtxt.style["opacity"] = "0.0";
+			matchedtxt.firstChild.nodeValue = ""
+		}
+	}
+	function search(term) {
+		var re = new RegExp(term);
+		var el = document.getElementsByTagName("g");
+		var matches = new Object();
+		var maxwidth = 0;
+		for (var i = 0; i < el.length; i++) {
+			var e = el[i];
+			if (e.attributes["class"].value != "func_g")
+				continue;
+			var func = g_to_func(e);
+			var rect = find_child(e, "rect");
+			if (rect == null) {
+				// the rect might be wrapped in an anchor
+				// if nameattr href is being used
+				if (rect = find_child(e, "a")) {
+				    rect = find_child(r, "rect");
+				}
+			}
+			if (func == null || rect == null)
+				continue;
+
+			// Save max width. Only works as we have a root frame
+			var w = parseFloat(rect.attributes["width"].value);
+			if (w > maxwidth)
+				maxwidth = w;
+
+			if (func.match(re)) {
+				// highlight
+				var x = parseFloat(rect.attributes["x"].value);
+				orig_save(rect, "fill");
+				rect.attributes["fill"].value =
+				    "rgb(230,0,230)";
+
+				// remember matches
+				if (matches[x] == undefined) {
+					matches[x] = w;
+				} else {
+					if (w > matches[x]) {
+						// overwrite with parent
+						matches[x] = w;
+					}
+				}
+				searching = 1;
+			}
+		}
+		if (!searching)
+			return;
+
+		searchbtn.style["opacity"] = "1.0";
+		searchbtn.firstChild.nodeValue = "Reset Search"
+
+		// calculate percent matched, excluding vertical overlap
+		var count = 0;
+		var lastx = -1;
+		var lastw = 0;
+		var keys = Array();
+		for (k in matches) {
+			if (matches.hasOwnProperty(k))
+				keys.push(k);
+		}
+		// sort the matched frames by their x location
+		// ascending, then width descending
+		keys.sort(function(a, b){
+				return a - b;
+			if (a < b || a > b)
+				return a - b;
+			return matches[b] - matches[a];
+		});
+		// Step through frames saving only the biggest bottom-up frames
+		// thanks to the sort order. This relies on the tree property
+		// where children are always smaller than their parents.
+		for (var k in keys) {
+			var x = parseFloat(keys[k]);
+			var w = matches[keys[k]];
+			if (x >= lastx + lastw) {
+				count += w;
+				lastx = x;
+				lastw = w;
+			}
+		}
+		// display matched percent
+		matchedtxt.style["opacity"] = "1.0";
+		pct = 100 * count / maxwidth;
+		if (pct == 100)
+			pct = "100"
+		else
+			pct = pct.toFixed(1)
+		matchedtxt.firstChild.nodeValue = "Matched: " + pct + "%";
+	}
+	function searchover(e) {
+		searchbtn.style["opacity"] = "1.0";
+	}
+	function searchout(e) {
+		if (searching) {
+			searchbtn.style["opacity"] = "1.0";
+		} else {
+			searchbtn.style["opacity"] = "0.1";
+		}
+	}
+]]>
+</script>
+<rect x="0.0" y="0" width="1200.0" height="322.0" fill="url(#background)"  />
+<text text-anchor="middle" x="600.00" y="24" font-size="17" font-family="Verdana" fill="rgb(0,0,0)"  >Flame Graph</text>
+<text text-anchor="" x="10.00" y="305" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="details" > </text>
+<text text-anchor="" x="10.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="unzoom" onclick="unzoom()" style="opacity:0.0;cursor:pointer" >Reset Zoom</text>
+<text text-anchor="" x="1090.00" y="24" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="search" onmouseover="searchover()" onmouseout="searchout()" onclick="search_prompt()" style="opacity:0.1;cursor:pointer" >Search</text>
+<text text-anchor="" x="1090.00" y="305" font-size="12" font-family="Verdana" fill="rgb(0,0,0)" id="matched" > </text>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/4f6mv1307q2avj2r18fd39hcr3hqmgds-setuptools-setup-hook.drv (1 samples, 1.18%)</title><rect x="523.6" y="113" width="13.9" height="15.0" fill="rgb(229,203,3)" rx="2" ry="2" />
+<text text-anchor="" x="526.65" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="190.5" y="129" width="13.9" height="15.0" fill="rgb(217,215,39)" rx="2" ry="2" />
+<text text-anchor="" x="193.47" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/4gp7cwcs70c7h9i92xms63vzkk2k3g2k-systemd-243.3.drv (3 samples, 3.53%)</title><rect x="37.8" y="241" width="41.6" height="15.0" fill="rgb(219,69,36)" rx="2" ry="2" />
+<text text-anchor="" x="40.76" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/26a6jszkxgzc185cc8whyyb0ibs907wd-set-environment.drv (4 samples, 4.71%)</title><rect x="259.9" y="225" width="55.5" height="15.0" fill="rgb(229,173,7)" rx="2" ry="2" />
+<text text-anchor="" x="262.88" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/13l3azkv05g060s8b7lzi1x5x7nd7fys-sshd.pam.drv (6 samples, 7.06%)</title><rect x="176.6" y="225" width="83.3" height="15.0" fill="rgb(239,113,2)" rx="2" ry="2" />
+<text text-anchor="" x="179.59" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (4 samples, 4.71%)</title><rect x="745.8" y="129" width="55.5" height="15.0" fill="rgb(231,181,3)" rx="2" ry="2" />
+<text text-anchor="" x="748.76" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/658anig7haymvz1k36p7hp3aca6gfp0y-cups-progs.drv (6 samples, 7.06%)</title><rect x="176.6" y="193" width="83.3" height="15.0" fill="rgb(239,141,32)" rx="2" ry="2" />
+<text text-anchor="" x="179.59" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/5zfr58fk5ja1p5ns37ia8f2h3zj57s2w-scons-3.1.1.drv (5 samples, 5.88%)</title><rect x="523.6" y="129" width="69.5" height="15.0" fill="rgb(227,109,18)" rx="2" ry="2" />
+<text text-anchor="" x="526.65" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/st..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/2pnw8fjymh4yxgnfgcj88j78dm8i0l2d-libmicrohttpd-0.9.68.drv (1 samples, 1.18%)</title><rect x="37.8" y="225" width="13.8" height="15.0" fill="rgb(246,61,26)" rx="2" ry="2" />
+<text text-anchor="" x="40.76" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/1k1ir2icvznb7hiikx002wi945dgcvpq-network-manager-applet-1.8.24.drv (9 samples, 10.59%)</title><rect x="384.8" y="193" width="125.0" height="15.0" fill="rgb(229,28,35)" rx="2" ry="2" />
+<text text-anchor="" x="387.82" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/1k1i..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="1148.4" y="129" width="13.8" height="15.0" fill="rgb(235,175,49)" rx="2" ry="2" />
+<text text-anchor="" x="1151.35" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/g5bsf7f0w3d96qypqd9bvl1l6r0cdbk4-pip-install-hook.drv (1 samples, 1.18%)</title><rect x="579.2" y="113" width="13.9" height="15.0" fill="rgb(207,23,10)" rx="2" ry="2" />
+<text text-anchor="" x="582.18" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="676.4" y="145" width="13.8" height="15.0" fill="rgb(241,186,5)" rx="2" ry="2" />
+<text text-anchor="" x="679.35" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/fy0mgyyrbz0flvllilb66ysfg7np7lqj-adwaita-icon-theme-3.34.3.drv (4 samples, 4.71%)</title><rect x="259.9" y="209" width="55.5" height="15.0" fill="rgb(238,96,21)" rx="2" ry="2" />
+<text text-anchor="" x="262.88" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cdzvx2qrqs6m1yprs98ffgch5z9yyijf-librsvg-2.46.4.drv (4 samples, 4.71%)</title><rect x="259.9" y="193" width="55.5" height="15.0" fill="rgb(212,21,2)" rx="2" ry="2" />
+<text text-anchor="" x="262.88" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/2shyawa7z0krq9pfrnvlyq4mfzpkvlaj-python2.7-funcsigs-1.0.2.drv (4 samples, 4.71%)</title><rect x="815.2" y="97" width="55.5" height="15.0" fill="rgb(238,174,21)" rx="2" ry="2" />
+<text text-anchor="" x="818.18" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>all (85 samples, 100%)</title><rect x="10.0" y="273" width="1180.0" height="15.0" fill="rgb(241,211,13)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="283.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/3c22b7wva5knkj8swcm0chws357fmd31-asound.conf.drv (1 samples, 1.18%)</title><rect x="315.4" y="225" width="13.9" height="15.0" fill="rgb(207,170,4)" rx="2" ry="2" />
+<text text-anchor="" x="318.41" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="65.5" y="177" width="13.9" height="15.0" fill="rgb(242,11,12)" rx="2" ry="2" />
+<text text-anchor="" x="68.53" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="815.2" y="81" width="13.9" height="15.0" fill="rgb(242,85,43)" rx="2" ry="2" />
+<text text-anchor="" x="818.18" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/6d1z4qqah8dan2clsmq8xkxn3yd8nqvi-python2.7-hypothesis-4.41.0.drv (2 samples, 2.35%)</title><rect x="884.6" y="97" width="27.8" height="15.0" fill="rgb(205,109,24)" rx="2" ry="2" />
+<text text-anchor="" x="887.59" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/64rggdynjy96adlndg1pl3fx5vdgcv4p-fontconfig-2.12.6.drv (1 samples, 1.18%)</title><rect x="79.4" y="177" width="13.9" height="15.0" fill="rgb(248,106,34)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/fnzbagx9m57123b5acvvhwnkapqs3rmj-glib-2.62.3.drv (2 samples, 2.35%)</title><rect x="51.6" y="225" width="27.8" height="15.0" fill="rgb(237,158,40)" rx="2" ry="2" />
+<text text-anchor="" x="54.65" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/dcdrcyavipjlyfbx9pq25zc1bggsdmgk-twemoji-color-font-12.0.1.drv (35 samples, 41.18%)</title><rect x="648.6" y="177" width="485.9" height="15.0" fill="rgb(235,211,41)" rx="2" ry="2" />
+<text text-anchor="" x="651.59" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/dcdrcyavipjlyfbx9pq25zc1bggsdmgk-twemoji-color-font-12...</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/b5sgn1a86kk0g6dm87svfs1arf6kilmd-python2.7-Cython-0.29.14.drv (3 samples, 3.53%)</title><rect x="690.2" y="113" width="41.7" height="15.0" fill="rgb(246,193,38)" rx="2" ry="2" />
+<text text-anchor="" x="693.24" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/5y1vb3al5gma116w3pa8hc1v356s9sin-gnome-doc-utils-0.20.10.drv (8 samples, 9.41%)</title><rect x="384.8" y="145" width="111.1" height="15.0" fill="rgb(245,190,7)" rx="2" ry="2" />
+<text text-anchor="" x="387.82" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/5y..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (3 samples, 3.53%)</title><rect x="454.2" y="129" width="41.7" height="15.0" fill="rgb(212,209,34)" rx="2" ry="2" />
+<text text-anchor="" x="457.24" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/f83qdzxnx0wqi88bqlw2bq3pw6y543y3-glib-networking-2.62.1.drv (1 samples, 1.18%)</title><rect x="357.1" y="193" width="13.8" height="15.0" fill="rgb(246,214,50)" rx="2" ry="2" />
+<text text-anchor="" x="360.06" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/qjrxw0n22bnmklr71zagslhv04hi3425-freerdp-2.0.0-rc4.drv (1 samples, 1.18%)</title><rect x="1148.4" y="145" width="13.8" height="15.0" fill="rgb(226,35,21)" rx="2" ry="2" />
+<text text-anchor="" x="1151.35" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/hsz2hr81mk07hlmymx5szyhbznr9gn8a-libxkbcommon-0.8.4.drv (1 samples, 1.18%)</title><rect x="162.7" y="177" width="13.9" height="15.0" fill="rgb(211,5,8)" rx="2" ry="2" />
+<text text-anchor="" x="165.71" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/p6y0laz6nf33bhx8zammsnk9gq245myv-python2.7-numpy-1.16.5.drv (24 samples, 28.24%)</title><rect x="801.3" y="129" width="333.2" height="15.0" fill="rgb(252,56,8)" rx="2" ry="2" />
+<text text-anchor="" x="804.29" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/p6y0laz6nf33bhx8zammsnk9gq245myv-p..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/9his94bfwn20p4xqrxyx43s9r9xwg25v-python2.7-setuptools-41.6.0.drv (5 samples, 5.88%)</title><rect x="384.8" y="129" width="69.4" height="15.0" fill="rgb(236,178,42)" rx="2" ry="2" />
+<text text-anchor="" x="387.82" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/st..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/p21n8imvn9zmx48q872ld84m5xv2b32b-crda-3.18.drv (2 samples, 2.35%)</title><rect x="606.9" y="209" width="27.8" height="15.0" fill="rgb(206,11,53)" rx="2" ry="2" />
+<text text-anchor="" x="609.94" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/6zlvib8nxzmk5gsnn5xh6x4zsh3knysb-gnutls-3.6.11.1.drv (1 samples, 1.18%)</title><rect x="37.8" y="209" width="13.8" height="15.0" fill="rgb(252,123,46)" rx="2" ry="2" />
+<text text-anchor="" x="40.76" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/y6j53ng935x1vfwmyazi7gdznjiajw2m-firefox-beta-bin-72.0b4.drv (1 samples, 1.18%)</title><rect x="1176.1" y="193" width="13.9" height="15.0" fill="rgb(227,121,33)" rx="2" ry="2" />
+<text text-anchor="" x="1179.12" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/id3nz0m1sna0w3m08njzdmwnsrkr5k9f-python2.7-M2Crypto-0.35.2.drv (1 samples, 1.18%)</title><rect x="620.8" y="193" width="13.9" height="15.0" fill="rgb(230,96,49)" rx="2" ry="2" />
+<text text-anchor="" x="623.82" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/1p52khwpqf1217gil1npai85fmhmjk3f-udisks-2.8.4.drv (1 samples, 1.18%)</title><rect x="329.3" y="209" width="13.9" height="15.0" fill="rgb(218,80,47)" rx="2" ry="2" />
+<text text-anchor="" x="332.29" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/xdxn07dsixpyrm8yv1ppj30acl5zvv8q-mesa-19.2.7.drv (1 samples, 1.18%)</title><rect x="134.9" y="161" width="13.9" height="15.0" fill="rgb(235,174,31)" rx="2" ry="2" />
+<text text-anchor="" x="137.94" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/x17rsiz87cgvdmfxmks32qq89v1m4vsi-python2.7-pytest-4.6.6.drv (23 samples, 27.06%)</title><rect x="815.2" y="113" width="319.3" height="15.0" fill="rgb(217,15,38)" rx="2" ry="2" />
+<text text-anchor="" x="818.18" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/x17rsiz87cgvdmfxmks32qq89v1m4vsi..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="51.6" y="209" width="13.9" height="15.0" fill="rgb(219,95,24)" rx="2" ry="2" />
+<text text-anchor="" x="54.65" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/lzg2983yzaz00xl3f482libd2s32rqsq-NetworkManager-vpnc-gnome-1.2.6.drv (6 samples, 7.06%)</title><rect x="523.6" y="209" width="83.3" height="15.0" fill="rgb(212,204,7)" rx="2" ry="2" />
+<text text-anchor="" x="526.65" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/kiwsrllzkg7zc0hj1884dn7mwc23by40-absolute_gir_path.patch.drv (5 samples, 5.88%)</title><rect x="79.4" y="209" width="69.4" height="15.0" fill="rgb(209,171,14)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/st..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="620.8" y="177" width="13.9" height="15.0" fill="rgb(242,3,19)" rx="2" ry="2" />
+<text text-anchor="" x="623.82" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/1m09fh394x19ab3sznl148bzfqalx9i4-nixos-system-Petunia-20.03.git.821d50e.drv (85 samples, 100.00%)</title><rect x="10.0" y="257" width="1180.0" height="15.0" fill="rgb(249,118,17)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="267.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/1m09fh394x19ab3sznl148bzfqalx9i4-nixos-system-Petunia-20.03.git.821d50e.drv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="23.9" y="225" width="13.9" height="15.0" fill="rgb(236,156,15)" rx="2" ry="2" />
+<text text-anchor="" x="26.88" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/k016fmkpdw18c72wq0a4m656bqs1hi37-ghostscript-9.50.drv (1 samples, 1.18%)</title><rect x="176.6" y="161" width="13.9" height="15.0" fill="rgb(233,116,44)" rx="2" ry="2" />
+<text text-anchor="" x="179.59" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="246.0" y="145" width="13.9" height="15.0" fill="rgb(224,92,32)" rx="2" ry="2" />
+<text text-anchor="" x="249.00" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="842.9" y="49" width="13.9" height="15.0" fill="rgb(249,152,19)" rx="2" ry="2" />
+<text text-anchor="" x="845.94" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/szzwbw24jkjm880x5z1p8wi56ykspnpi-python2.7-pkgconfig-1.5.1.drv (2 samples, 2.35%)</title><rect x="704.1" y="97" width="27.8" height="15.0" fill="rgb(205,173,33)" rx="2" ry="2" />
+<text text-anchor="" x="707.12" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="1162.2" y="177" width="13.9" height="15.0" fill="rgb(216,213,5)" rx="2" ry="2" />
+<text text-anchor="" x="1165.24" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="523.6" y="97" width="13.9" height="15.0" fill="rgb(232,97,24)" rx="2" ry="2" />
+<text text-anchor="" x="526.65" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/0aqwjlg5nn4fcfbllr0667mjm8ln164x-firefox-beta-bin-unwrapped-72.0b4.drv (1 samples, 1.18%)</title><rect x="1176.1" y="177" width="13.9" height="15.0" fill="rgb(227,112,35)" rx="2" ry="2" />
+<text text-anchor="" x="1179.12" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/1zp7zigr9mwz8mg5n7m5532vp5mijidq-python2.7-nose-1.3.7.drv (1 samples, 1.18%)</title><rect x="704.1" y="81" width="13.9" height="15.0" fill="rgb(212,34,3)" rx="2" ry="2" />
+<text text-anchor="" x="707.12" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="509.8" y="177" width="13.8" height="15.0" fill="rgb(211,60,16)" rx="2" ry="2" />
+<text text-anchor="" x="512.76" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="1176.1" y="161" width="13.9" height="15.0" fill="rgb(212,76,1)" rx="2" ry="2" />
+<text text-anchor="" x="1179.12" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="162.7" y="161" width="13.9" height="15.0" fill="rgb(248,24,38)" rx="2" ry="2" />
+<text text-anchor="" x="165.71" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/7w9bkq2xzhr4p25bd3q8nqfbfib6c6ks-rpmextract.sh.drv (1 samples, 1.18%)</title><rect x="1134.5" y="145" width="13.9" height="15.0" fill="rgb(219,202,14)" rx="2" ry="2" />
+<text text-anchor="" x="1137.47" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="370.9" y="209" width="13.9" height="15.0" fill="rgb(251,15,21)" rx="2" ry="2" />
+<text text-anchor="" x="373.94" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="301.5" y="161" width="13.9" height="15.0" fill="rgb(233,101,8)" rx="2" ry="2" />
+<text text-anchor="" x="304.53" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/7n3hhsm1s5rn981wbp10q6h6n4nkndxr-gobject-introspection-1.62.0.drv (5 samples, 5.88%)</title><rect x="79.4" y="225" width="69.4" height="15.0" fill="rgb(224,15,7)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/st..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="801.3" y="113" width="13.9" height="15.0" fill="rgb(230,16,14)" rx="2" ry="2" />
+<text text-anchor="" x="804.29" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="606.9" y="193" width="13.9" height="15.0" fill="rgb(208,17,43)" rx="2" ry="2" />
+<text text-anchor="" x="609.94" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/ps8rd7iivck0n0b67wbwcr3pvkajcpbw-cairo-1.16.0.drv (5 samples, 5.88%)</title><rect x="79.4" y="193" width="69.4" height="15.0" fill="rgb(242,177,48)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/st..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/nwqypi2kn3qpzi77ya5nh6s8aqgrd0fl-xcb-util-0.4.0.drv (2 samples, 2.35%)</title><rect x="93.3" y="177" width="27.8" height="15.0" fill="rgb(231,174,37)" rx="2" ry="2" />
+<text text-anchor="" x="96.29" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/ph375pdx2mvf8b1hkiddyy8rgasz6f94-python2.7-pluggy-0.13.0.drv (4 samples, 4.71%)</title><rect x="1078.9" y="97" width="55.6" height="15.0" fill="rgb(249,148,3)" rx="2" ry="2" />
+<text text-anchor="" x="1081.94" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="218.2" y="97" width="13.9" height="15.0" fill="rgb(208,79,10)" rx="2" ry="2" />
+<text text-anchor="" x="221.24" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="648.6" y="145" width="13.9" height="15.0" fill="rgb(244,108,18)" rx="2" ry="2" />
+<text text-anchor="" x="651.59" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/phns1czn57jp466ilglii8c6ypv90qhp-libxml2+py-2.9.10.drv (1 samples, 1.18%)</title><rect x="65.5" y="193" width="13.9" height="15.0" fill="rgb(219,54,5)" rx="2" ry="2" />
+<text text-anchor="" x="68.53" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/qjwawvd5j8m2b2f60gha6yaj82q4v06v-libGL-1.2.0.drv (2 samples, 2.35%)</title><rect x="121.1" y="177" width="27.7" height="15.0" fill="rgb(246,94,17)" rx="2" ry="2" />
+<text text-anchor="" x="124.06" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/gpdki7abdgg53fhp5y4kvx1rcyr00945-python2.7-packaging-19.2.drv (1 samples, 1.18%)</title><rect x="1037.3" y="97" width="13.9" height="15.0" fill="rgb(237,72,36)" rx="2" ry="2" />
+<text text-anchor="" x="1040.29" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="829.1" y="65" width="13.8" height="15.0" fill="rgb(249,38,20)" rx="2" ry="2" />
+<text text-anchor="" x="832.06" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/j779znr65m2madn5b1007cwqf2ry7ynf-NetworkManager-openvpn-gnome-1.8.10.drv (9 samples, 10.59%)</title><rect x="384.8" y="209" width="125.0" height="15.0" fill="rgb(211,193,7)" rx="2" ry="2" />
+<text text-anchor="" x="387.82" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/j779..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/j071kv5lnpq8kxiwv0am1mkli562cr4y-python2.7-linecache2-1.0.0.drv (1 samples, 1.18%)</title><rect x="856.8" y="49" width="13.9" height="15.0" fill="rgb(246,192,3)" rx="2" ry="2" />
+<text text-anchor="" x="859.82" y="59.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/lsv3kd08aa5kyhj95zny96wk8xd73qwh-vpnc-r550.drv (6 samples, 7.06%)</title><rect x="523.6" y="177" width="83.3" height="15.0" fill="rgb(222,53,16)" rx="2" ry="2" />
+<text text-anchor="" x="526.65" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/0bf267ayz2c4v9195g28sn4pzic7b52l-fuse-3.9.0.drv (2 samples, 2.35%)</title><rect x="10.0" y="241" width="27.8" height="15.0" fill="rgb(208,121,53)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/igsyz1jf54mllmvdl2l2wdm1kz4wqb3q-cargo-1.39.0.drv (1 samples, 1.18%)</title><rect x="301.5" y="177" width="13.9" height="15.0" fill="rgb(228,139,28)" rx="2" ry="2" />
+<text text-anchor="" x="304.53" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="176.6" y="145" width="13.9" height="15.0" fill="rgb(213,106,49)" rx="2" ry="2" />
+<text text-anchor="" x="179.59" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/mqaqk435cnz3r411wmvyp26ndfm3y6sk-system-path.drv (40 samples, 47.06%)</title><rect x="634.7" y="209" width="555.3" height="15.0" fill="rgb(230,145,38)" rx="2" ry="2" />
+<text text-anchor="" x="637.71" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/mqaqk435cnz3r411wmvyp26ndfm3y6sk-system-path.drv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/b6x9n2v0fxbbhq4dly3gkpisg55l88qf-X11-fonts.drv (36 samples, 42.35%)</title><rect x="648.6" y="193" width="499.8" height="15.0" fill="rgb(216,140,47)" rx="2" ry="2" />
+<text text-anchor="" x="651.59" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/b6x9n2v0fxbbhq4dly3gkpisg55l88qf-X11-fonts.drv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (3 samples, 3.53%)</title><rect x="537.5" y="113" width="41.7" height="15.0" fill="rgb(238,219,17)" rx="2" ry="2" />
+<text text-anchor="" x="540.53" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="148.8" y="225" width="13.9" height="15.0" fill="rgb(225,129,40)" rx="2" ry="2" />
+<text text-anchor="" x="151.82" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (3 samples, 3.53%)</title><rect x="384.8" y="97" width="41.7" height="15.0" fill="rgb(210,180,8)" rx="2" ry="2" />
+<text text-anchor="" x="387.82" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="662.5" y="161" width="13.9" height="15.0" fill="rgb(216,162,41)" rx="2" ry="2" />
+<text text-anchor="" x="665.47" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/2jzjsh8l2m2ab9d2xq9w0w6s8mh582d7-dejavu-fonts-full-2.37.drv (1 samples, 1.18%)</title><rect x="79.4" y="145" width="13.9" height="15.0" fill="rgb(214,213,51)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="1078.9" y="81" width="13.9" height="15.0" fill="rgb(219,105,33)" rx="2" ry="2" />
+<text text-anchor="" x="1081.94" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="704.1" y="65" width="13.9" height="15.0" fill="rgb(220,198,52)" rx="2" ry="2" />
+<text text-anchor="" x="707.12" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/85yhrkq9nqw5k5y0yr71m7r8pp340kfp-force-path.patch.drv (1 samples, 1.18%)</title><rect x="329.3" y="193" width="13.9" height="15.0" fill="rgb(215,213,33)" rx="2" ry="2" />
+<text text-anchor="" x="332.29" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cw4hn31430s4w6llprcsdr2ny88rdxha-sway-joined.drv (1 samples, 1.18%)</title><rect x="1148.4" y="193" width="13.8" height="15.0" fill="rgb(221,29,15)" rx="2" ry="2" />
+<text text-anchor="" x="1151.35" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="107.2" y="145" width="13.9" height="15.0" fill="rgb(249,1,6)" rx="2" ry="2" />
+<text text-anchor="" x="110.18" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/01rhpcpyx5b5dx2hj07yblcyjp0k8ksj-sway-1.2.drv (1 samples, 1.18%)</title><rect x="1148.4" y="177" width="13.8" height="15.0" fill="rgb(254,207,37)" rx="2" ry="2" />
+<text text-anchor="" x="1151.35" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="495.9" y="145" width="13.9" height="15.0" fill="rgb(239,210,50)" rx="2" ry="2" />
+<text text-anchor="" x="498.88" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/sxm64caqdc5qfkbgyvbpygfdifannpn9-vegur-font-0.701.drv (1 samples, 1.18%)</title><rect x="1134.5" y="177" width="13.9" height="15.0" fill="rgb(246,213,2)" rx="2" ry="2" />
+<text text-anchor="" x="1137.47" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/wj3rfb9nalgm2mm0yy7kl0568jv93y1y-libinput-1.14.3.drv (1 samples, 1.18%)</title><rect x="218.2" y="113" width="13.9" height="15.0" fill="rgb(219,22,27)" rx="2" ry="2" />
+<text text-anchor="" x="221.24" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/xb5g6i8idp2izpnhsp496g5frlgaj3c4-pam-environment.drv (6 samples, 7.06%)</title><rect x="176.6" y="209" width="83.3" height="15.0" fill="rgb(253,58,8)" rx="2" ry="2" />
+<text text-anchor="" x="179.59" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/3xq6pvmxwpiv02p3dhgar595sf9l6yqq-vpnc-0.5.3-post-r550.drv (6 samples, 7.06%)</title><rect x="523.6" y="193" width="83.3" height="15.0" fill="rgb(224,44,39)" rx="2" ry="2" />
+<text text-anchor="" x="526.65" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (9 samples, 10.59%)</title><rect x="912.4" y="97" width="124.9" height="15.0" fill="rgb(250,154,49)" rx="2" ry="2" />
+<text text-anchor="" x="915.35" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/cskm..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/vvpxr4kg0s677dbk0p8p1j926znxwkrr-libxcb-1.13.1.drv (1 samples, 1.18%)</title><rect x="107.2" y="161" width="13.9" height="15.0" fill="rgb(247,187,39)" rx="2" ry="2" />
+<text text-anchor="" x="110.18" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/5dkqpyvxp6knklm43rw6r6b61scy2i02-google-chrome-79.0.3945.79.drv (1 samples, 1.18%)</title><rect x="634.7" y="193" width="13.9" height="15.0" fill="rgb(210,174,36)" rx="2" ry="2" />
+<text text-anchor="" x="637.71" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="856.8" y="33" width="13.9" height="15.0" fill="rgb(226,149,2)" rx="2" ry="2" />
+<text text-anchor="" x="859.82" y="43.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="329.3" y="177" width="13.9" height="15.0" fill="rgb(216,66,17)" rx="2" ry="2" />
+<text text-anchor="" x="332.29" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/08jjyqhj3rc5a2pdxx0v2gpj83sd41lj-hook.drv (3 samples, 3.53%)</title><rect x="190.5" y="145" width="41.6" height="15.0" fill="rgb(213,46,41)" rx="2" ry="2" />
+<text text-anchor="" x="193.47" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (2 samples, 2.35%)</title><rect x="1051.2" y="81" width="27.7" height="15.0" fill="rgb(205,120,51)" rx="2" ry="2" />
+<text text-anchor="" x="1054.18" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/jrsrhvd9vf6fg688i4wkqv1m0f91qm14-NetworkManager-l2tp-gnome-1.2.12.drv (1 samples, 1.18%)</title><rect x="509.8" y="209" width="13.8" height="15.0" fill="rgb(222,8,41)" rx="2" ry="2" />
+<text text-anchor="" x="512.76" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/6lnsdsdbsb5wa9yw4v5dp6yl366yxlm4-dbus-1.drv (40 samples, 47.06%)</title><rect x="634.7" y="225" width="555.3" height="15.0" fill="rgb(235,150,30)" rx="2" ry="2" />
+<text text-anchor="" x="637.71" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/6lnsdsdbsb5wa9yw4v5dp6yl366yxlm4-dbus-1.drv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="634.7" y="177" width="13.9" height="15.0" fill="rgb(212,201,20)" rx="2" ry="2" />
+<text text-anchor="" x="637.71" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="579.2" y="97" width="13.9" height="15.0" fill="rgb(239,179,25)" rx="2" ry="2" />
+<text text-anchor="" x="582.18" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="593.1" y="129" width="13.8" height="15.0" fill="rgb(205,99,5)" rx="2" ry="2" />
+<text text-anchor="" x="596.06" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="731.9" y="113" width="13.9" height="15.0" fill="rgb(210,198,29)" rx="2" ry="2" />
+<text text-anchor="" x="734.88" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/9mpccz6fak7pajrrd2pbji380lxpbmpx-alsa-plugins-1.2.1.drv (1 samples, 1.18%)</title><rect x="315.4" y="209" width="13.9" height="15.0" fill="rgb(254,136,6)" rx="2" ry="2" />
+<text text-anchor="" x="318.41" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="232.1" y="145" width="13.9" height="15.0" fill="rgb(239,116,26)" rx="2" ry="2" />
+<text text-anchor="" x="235.12" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/4dkk8ba6n0659b0zik9y8in3i7ycmxzl-python2.7-py-1.8.0.drv (1 samples, 1.18%)</title><rect x="870.7" y="97" width="13.9" height="15.0" fill="rgb(218,224,52)" rx="2" ry="2" />
+<text text-anchor="" x="873.71" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/60abwwv34b7321vd04lgscs45ahwdn5b-additional-cups-backends.drv (1 samples, 1.18%)</title><rect x="246.0" y="177" width="13.9" height="15.0" fill="rgb(252,3,50)" rx="2" ry="2" />
+<text text-anchor="" x="249.00" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/05c4xr1fqq1q0hwz1x5jsnhkwq5y7327-python2.7-bootstrapped-pip-19.3.1.drv (3 samples, 3.53%)</title><rect x="384.8" y="113" width="41.7" height="15.0" fill="rgb(205,69,9)" rx="2" ry="2" />
+<text text-anchor="" x="387.82" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/nvq7kyrrdy79pfja0s4rg342dfaz2pwv-slack-4.2.0.drv (1 samples, 1.18%)</title><rect x="1162.2" y="193" width="13.9" height="15.0" fill="rgb(235,28,48)" rx="2" ry="2" />
+<text text-anchor="" x="1165.24" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/iq1iry6ggs6p30vzd5srf0mis44zw2r7-python2.7-unittest2-1.1.0.drv (3 samples, 3.53%)</title><rect x="829.1" y="81" width="41.6" height="15.0" fill="rgb(249,159,3)" rx="2" ry="2" />
+<text text-anchor="" x="832.06" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/w03sc3i1ih1qp3nfnhng783fv4wazlk1-python3.7-pyqt-5.13.0.drv (4 samples, 4.71%)</title><rect x="190.5" y="161" width="55.5" height="15.0" fill="rgb(247,144,47)" rx="2" ry="2" />
+<text text-anchor="" x="193.47" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/b1xp733jkwzv8156m778xhyi4fcnyir3-fwupd-1.3.3.drv (1 samples, 1.18%)</title><rect x="357.1" y="209" width="13.8" height="15.0" fill="rgb(216,192,43)" rx="2" ry="2" />
+<text text-anchor="" x="360.06" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/3n7pgdvm5laf75d62xjyk4vfp2zfh37r-wpa_supplicant-2.9.drv (1 samples, 1.18%)</title><rect x="343.2" y="209" width="13.9" height="15.0" fill="rgb(215,133,46)" rx="2" ry="2" />
+<text text-anchor="" x="346.18" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/i6mnbz2j1yym40skxv2hd39lv8fx3hjl-wlroots-0.8.1.drv (1 samples, 1.18%)</title><rect x="1148.4" y="161" width="13.8" height="15.0" fill="rgb(224,160,15)" rx="2" ry="2" />
+<text text-anchor="" x="1151.35" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="10.0" y="209" width="13.9" height="15.0" fill="rgb(245,176,38)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (3 samples, 3.53%)</title><rect x="1092.8" y="65" width="41.7" height="15.0" fill="rgb(205,193,7)" rx="2" ry="2" />
+<text text-anchor="" x="1095.82" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="718.0" y="81" width="13.9" height="15.0" fill="rgb(242,227,42)" rx="2" ry="2" />
+<text text-anchor="" x="721.00" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/7iqfrn1vc3win8jvxxz5i6qh0imx9xn4-polkit-0.116.drv (6 samples, 7.06%)</title><rect x="79.4" y="241" width="83.3" height="15.0" fill="rgb(205,125,25)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/09qknppil0s9qsk6y0yy0ynxs40q3p81-SDL2-2.0.10.drv (1 samples, 1.18%)</title><rect x="162.7" y="193" width="13.9" height="15.0" fill="rgb(209,177,42)" rx="2" ry="2" />
+<text text-anchor="" x="165.71" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/vi24jwh507h3r2v40zlldxvakmwpwr94-samba-4.10.11.drv (1 samples, 1.18%)</title><rect x="246.0" y="161" width="13.9" height="15.0" fill="rgb(233,192,39)" rx="2" ry="2" />
+<text text-anchor="" x="249.00" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="79.4" y="129" width="13.9" height="15.0" fill="rgb(242,86,8)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/byziwj4jh4r5avi4x6qm76mfidc1xbih-rpmextract.drv (1 samples, 1.18%)</title><rect x="1134.5" y="161" width="13.9" height="15.0" fill="rgb(230,28,34)" rx="2" ry="2" />
+<text text-anchor="" x="1137.47" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/ilbkrgdcp7m995rj0amwds17q1x9cjpp-gtk-doc-1.32.drv (1 samples, 1.18%)</title><rect x="65.5" y="209" width="13.9" height="15.0" fill="rgb(227,180,10)" rx="2" ry="2" />
+<text text-anchor="" x="68.53" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (2 samples, 2.35%)</title><rect x="884.6" y="81" width="27.8" height="15.0" fill="rgb(214,88,23)" rx="2" ry="2" />
+<text text-anchor="" x="887.59" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/2xs6hfbr2l0fvvr8qc0i23bh1266v0h3-ninja-1.9.0.drv (1 samples, 1.18%)</title><rect x="10.0" y="225" width="13.9" height="15.0" fill="rgb(227,191,13)" rx="2" ry="2" />
+<text text-anchor="" x="13.00" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/v7g24iq4d3ps8ha199zfn9j1cwiq6gm2-dejavu-fonts-minimal-2.37.drv (1 samples, 1.18%)</title><rect x="79.4" y="161" width="13.9" height="15.0" fill="rgb(214,18,38)" rx="2" ry="2" />
+<text text-anchor="" x="82.41" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/mz2vp6h9vkrpzwhn2fdv93wvvh5dpcsa-python2.7-importlib-metadata-0.23.drv (3 samples, 3.53%)</title><rect x="1092.8" y="81" width="41.7" height="15.0" fill="rgb(251,79,22)" rx="2" ry="2" />
+<text text-anchor="" x="1095.82" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/3fq716jzrg9ndic46br0gsncsq4mr2iv-qrencode-4.0.2.drv (1 samples, 1.18%)</title><rect x="162.7" y="209" width="13.9" height="15.0" fill="rgb(243,73,52)" rx="2" ry="2" />
+<text text-anchor="" x="165.71" y="219.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/i12m48yap04hm99h2nv81hk5i57gqbbr-python2.7-pathlib2-2.3.5.drv (2 samples, 2.35%)</title><rect x="1051.2" y="97" width="27.7" height="15.0" fill="rgb(220,217,35)" rx="2" ry="2" />
+<text text-anchor="" x="1054.18" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/akmlxxmbzn5ldqp3lxbd77gz6iw14ifr-serf-1.3.9.drv (6 samples, 7.06%)</title><rect x="523.6" y="145" width="83.3" height="15.0" fill="rgb(239,180,17)" rx="2" ry="2" />
+<text text-anchor="" x="526.65" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/mi83fmp58y4hwdpz92j0vv6gsijws3p9-etc.drv (73 samples, 85.88%)</title><rect x="176.6" y="241" width="1013.4" height="15.0" fill="rgb(212,160,44)" rx="2" ry="2" />
+<text text-anchor="" x="179.59" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/mi83fmp58y4hwdpz92j0vv6gsijws3p9-etc.drv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/m1ki53s7waz7azfsnvk6wq9vawm6sa0z-qtbase-5.12.6.drv (2 samples, 2.35%)</title><rect x="204.4" y="129" width="27.7" height="15.0" fill="rgb(224,25,33)" rx="2" ry="2" />
+<text text-anchor="" x="207.35" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/sxsvhf1bxzzw23wqpqsz034irjc216hs-python2.7-traceback2-1.4.0.drv (2 samples, 2.35%)</title><rect x="842.9" y="65" width="27.8" height="15.0" fill="rgb(220,47,19)" rx="2" ry="2" />
+<text text-anchor="" x="845.94" y="75.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="315.4" y="177" width="13.9" height="15.0" fill="rgb(230,78,33)" rx="2" ry="2" />
+<text text-anchor="" x="318.41" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/pz8mg58xdkzijgr0nwfyh9n2jk0mx1zb-subversion-1.12.2.drv (6 samples, 7.06%)</title><rect x="523.6" y="161" width="83.3" height="15.0" fill="rgb(233,148,52)" rx="2" ry="2" />
+<text text-anchor="" x="526.65" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/stor..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/k4bwifszw3ikgadn6i4slganjwx6nnxr-password-store-1.7.3.drv (1 samples, 1.18%)</title><rect x="162.7" y="225" width="13.9" height="15.0" fill="rgb(251,224,9)" rx="2" ry="2" />
+<text text-anchor="" x="165.71" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/3r0jbzz2cz4f6drsnm67yifvg54r6s04-system-generators.drv (22 samples, 25.88%)</title><rect x="329.3" y="225" width="305.4" height="15.0" fill="rgb(209,23,43)" rx="2" ry="2" />
+<text text-anchor="" x="332.29" y="235.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/3r0jbzz2cz4f6drsnm67yifvg54r6s..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cl6lgn70cbwqrxvk2qaq2dn5rrjrlcps-python2.7-lxml-4.4.2.drv (4 samples, 4.71%)</title><rect x="690.2" y="129" width="55.6" height="15.0" fill="rgb(238,164,51)" rx="2" ry="2" />
+<text text-anchor="" x="693.24" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/g2wa57hwgdbdk28im77bxy0w0zrlh98z-fix-paths.patch.drv (1 samples, 1.18%)</title><rect x="509.8" y="193" width="13.8" height="15.0" fill="rgb(254,32,49)" rx="2" ry="2" />
+<text text-anchor="" x="512.76" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="343.2" y="193" width="13.9" height="15.0" fill="rgb(218,172,51)" rx="2" ry="2" />
+<text text-anchor="" x="346.18" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/86x24929s8d5sin5al8ka96nmqc1pl5l-passff-host-1.3.drv (1 samples, 1.18%)</title><rect x="162.7" y="241" width="13.9" height="15.0" fill="rgb(224,178,14)" rx="2" ry="2" />
+<text text-anchor="" x="165.71" y="251.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="37.8" y="193" width="13.8" height="15.0" fill="rgb(233,62,41)" rx="2" ry="2" />
+<text text-anchor="" x="40.76" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="690.2" y="97" width="13.9" height="15.0" fill="rgb(238,35,48)" rx="2" ry="2" />
+<text text-anchor="" x="693.24" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="121.1" y="161" width="13.8" height="15.0" fill="rgb(236,117,34)" rx="2" ry="2" />
+<text text-anchor="" x="124.06" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (2 samples, 2.35%)</title><rect x="426.5" y="113" width="27.7" height="15.0" fill="rgb(225,99,44)" rx="2" ry="2" />
+<text text-anchor="" x="429.47" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="1037.3" y="81" width="13.9" height="15.0" fill="rgb(243,194,5)" rx="2" ry="2" />
+<text text-anchor="" x="1040.29" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/hhl6ml7s005nwdapr2cw4lc2rzw85i54-gtk+3-3.24.12.drv (1 samples, 1.18%)</title><rect x="204.4" y="113" width="13.8" height="15.0" fill="rgb(231,96,24)" rx="2" ry="2" />
+<text text-anchor="" x="207.35" y="123.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/v4zia3ibjm6xvkawn2j51qip61j6i7aw-inkscape-0.92.4.drv (33 samples, 38.82%)</title><rect x="676.4" y="161" width="458.1" height="15.0" fill="rgb(212,145,27)" rx="2" ry="2" />
+<text text-anchor="" x="679.35" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/v4zia3ibjm6xvkawn2j51qip61j6i7aw-inkscape-0.92.4.drv</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (3 samples, 3.53%)</title><rect x="259.9" y="177" width="41.6" height="15.0" fill="rgb(242,204,43)" rx="2" ry="2" />
+<text text-anchor="" x="262.88" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/ni..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/d7ihw7kcnrf8bzn9zvxa57zrrzjkmlxx-libappindicator-gtk3-12.10.0.drv (9 samples, 10.59%)</title><rect x="384.8" y="177" width="125.0" height="15.0" fill="rgb(235,107,11)" rx="2" ry="2" />
+<text text-anchor="" x="387.82" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/d7ih..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="1134.5" y="129" width="13.9" height="15.0" fill="rgb(214,39,17)" rx="2" ry="2" />
+<text text-anchor="" x="1137.47" y="139.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="204.4" y="97" width="13.8" height="15.0" fill="rgb(222,13,39)" rx="2" ry="2" />
+<text text-anchor="" x="207.35" y="107.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/1n1m6f83ds7wsvq9n9na539iqgjz1k83-hplip-3.19.6.drv (5 samples, 5.88%)</title><rect x="176.6" y="177" width="69.4" height="15.0" fill="rgb(245,60,31)" rx="2" ry="2" />
+<text text-anchor="" x="179.59" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/st..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="357.1" y="177" width="13.8" height="15.0" fill="rgb(250,91,9)" rx="2" ry="2" />
+<text text-anchor="" x="360.06" y="187.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/61pq8x2qswmw2q2l6fj3mw1k6kz1c242-node_svgo-1.3.2.drv (1 samples, 1.18%)</title><rect x="648.6" y="161" width="13.9" height="15.0" fill="rgb(237,217,54)" rx="2" ry="2" />
+<text text-anchor="" x="651.59" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/qnb2s3fikpx0w021k236d1lxbigkj625-python-2.7.17-env.drv (32 samples, 37.65%)</title><rect x="690.2" y="145" width="444.3" height="15.0" fill="rgb(240,156,11)" rx="2" ry="2" />
+<text text-anchor="" x="693.24" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/qnb2s3fikpx0w021k236d1lxbigkj625-python-2.7.17-en..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="134.9" y="145" width="13.9" height="15.0" fill="rgb(220,61,39)" rx="2" ry="2" />
+<text text-anchor="" x="137.94" y="155.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/fl4qs40r45x1aa0kq39pki1zwyjy923l-libdbusmenu-gtk3-16.04.0.drv (9 samples, 10.59%)</title><rect x="384.8" y="161" width="125.0" height="15.0" fill="rgb(223,130,45)" rx="2" ry="2" />
+<text text-anchor="" x="387.82" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  >/nix/store/fl4q..</text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/m482v3g9icd0ry10jg3vl2l3603d9gnn-libjack2-1.9.14.drv (1 samples, 1.18%)</title><rect x="315.4" y="193" width="13.9" height="15.0" fill="rgb(235,177,34)" rx="2" ry="2" />
+<text text-anchor="" x="318.41" y="203.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="870.7" y="81" width="13.9" height="15.0" fill="rgb(234,67,12)" rx="2" ry="2" />
+<text text-anchor="" x="873.71" y="91.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+<g class="func_g" onmouseover="s(this)" onmouseout="c()" onclick="zoom(this)">
+<title>/nix/store/cskmmlpp9lj5w2va7nqq68ni4rlcv3g8-python-2.7.17.drv (1 samples, 1.18%)</title><rect x="93.3" y="161" width="13.9" height="15.0" fill="rgb(214,190,22)" rx="2" ry="2" />
+<text text-anchor="" x="96.29" y="171.5" font-size="12" font-family="Verdana" fill="rgb(0,0,0)"  ></text>
+</g>
+</svg>

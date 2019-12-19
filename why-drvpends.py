@@ -53,14 +53,18 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("package_drv")
     parser.add_argument("dependency_drv")
+    parser.add_argument("--flame", action="store_true")
     args = parser.parse_args()
 
     for route in spelunk(args.package_drv, args.dependency_drv):
-        level = -1
-        for step in route:
-            level += 1
-            print("{indent}=> {step}".format(indent="  " * level, step=step))
-        print()
+        if args.flame:
+            print("{stack} 1".format(stack=";".join(route)))
+        else:
+            level = -1
+            for step in route:
+                level += 1
+                print("{indent}=> {step}".format(indent="  " * level, step=step))
+            print()
 
 
 if __name__ == "__main__":
